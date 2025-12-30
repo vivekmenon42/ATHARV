@@ -1,6 +1,7 @@
 voila
 jupyter
 notebook
+ipympl
 numpy
 matplotlib
 scipy
