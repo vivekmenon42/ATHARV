@@ -12,3 +12,6 @@ sunpy
 astropy
 python-dateutil
 cdasws
+spacepy
+cdflib
+xarray
