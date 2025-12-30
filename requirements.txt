@@ -1,0 +1,13 @@
+voila
+jupyter
+notebook
+numpy
+matplotlib
+scipy
+pandas
+Pillow
+ipywidgets
+sunpy
+astropy
+python-dateutil
+cdasws
