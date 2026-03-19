@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d, PchipInterpolator
 from matplotlib.animation import PillowWriter
 from PIL import Image
+import datetime
 
 # ============================================================================
 # INTERPOLATION FUNCTIONS
@@ -109,7 +110,7 @@ def pchip_vector_interp(t_source, vectors, t_target, align=True):
         t_target = t_target_orig
         t_target_clipped = t_target_dt
 
-    interpolators = [PchipInterpolator(t_source, vectors[:, i], extrapolate=False) for i in range(3)]
+    interpolators = [PchipInterpolator(t_source, vectors[:, i], extrapolate=True) for i in range(3)]
     vectors_interp = np.stack([interp(t_target) for interp in interpolators], axis=1)
 
     if align:
@@ -545,6 +546,7 @@ def calculate_cme_positions(t_array, r_sc_array, t0, t1, t2,
         # Compute cumulative displacement
         Vdt = v_sheath_timeseries * dt[:, np.newaxis]  # shape (N_sheath, 3)
         displacement = np.cumsum(Vdt, axis=0)
+        displacement = displacement - displacement[0]  # pin to zero at t0
         
         # Remap positions
         r_positions[sheath_indices] = r_sc_sheath - displacement
@@ -735,6 +737,28 @@ def draw_time_plane(ax, x_position, color='k', alpha=0.2):
     X_plane = np.full_like(Y, x_position)
     ax.plot_surface(X_plane, Y, Z, color=color, alpha=alpha, zorder=0)
 
+def draw_time_plane_wireframe(ax, x_position, color='grey', alpha=0.5):
+    """
+    Draw a rectangular wireframe plane at fixed X position spanning full Y-Z range.
+
+    Parameters
+    ----------
+    ax : matplotlib Axes3D
+        3D axes object
+    x_position : float
+        X coordinate for the plane
+    color : str, default='k'
+        Plane color
+    alpha : float, default=0.2
+        Transparency level
+    """
+    y = np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], 10)  # More divisions
+    z = np.linspace(ax.get_zlim()[0], ax.get_zlim()[1], 10)
+    Y, Z = np.meshgrid(y, z)
+    X_plane = np.full_like(Y, x_position)
+    ax.plot_wireframe(X_plane, Y, Z, color=color, alpha=alpha, 
+                      linewidth=0.8, zorder=0)
+
 
 def save_gif(ani, filename, fps=20, dpi=100):
     """
@@ -776,3 +800,41 @@ def save_gif(ani, filename, fps=20, dpi=100):
     )
     
     print(f"✅ Saved optimized GIF: {filename}")
+
+def check_data_coverage(t_B, t_V, T_CME_START, T_CME_END, gap_tolerance_multiplier=10):
+    warnings = []
+
+    series_to_check = [("B", t_B)] + ([("V", t_V)] if t_V is not None else [])
+
+    for label, t in series_to_check:
+        t_sec = np.array([x.timestamp() if hasattr(x, 'timestamp') else x for x in t])
+        t_dt  = [x if hasattr(x, 'timestamp') else datetime.utcfromtimestamp(x) for x in t]
+
+        # Check boundary coverage
+        start_lag = (t_sec[0] - T_CME_START.timestamp()) / 60
+        end_lag   = (T_CME_END.timestamp() - t_sec[-1]) / 60
+        if start_lag > 5:  # more than 5 minutes late
+            warnings.append(f"{label} data starts {start_lag:.2f} mins after CME start")
+        if end_lag > 5:  # more than 5 minutes early
+            warnings.append(f"{label} data ends {end_lag:.2f} mins before CME end")
+
+        # Check internal gaps
+        cadence = np.median(np.diff(t_sec))
+        # print(f"{label} data cadence: {cadence:.2f} seconds")
+        diffs   = np.diff(t_sec)
+        gap_idx = np.where(diffs > gap_tolerance_multiplier * cadence)[0]
+        for i in gap_idx:
+            gap_duration_mins = diffs[i] / 60
+            gap_start = t_dt[i]
+            gap_end   = t_dt[i + 1]
+            warnings.append(
+                f"{label} internal gap of {gap_duration_mins:.2f} mins "
+                f"({gap_start.strftime('%Y-%m-%d %H:%M')} – {gap_end.strftime('%Y-%m-%d %H:%M')})"
+            )
+
+    if warnings:
+        print("⚠️  Whoops! We do not have full and continuous data for the entire duration you have specified:")
+        for w in warnings:
+            print(f"   • {w}")
+    else:
+        print("✅  Data coverage looks complete for the specified CME duration.")
