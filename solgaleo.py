@@ -454,9 +454,89 @@ def fit_velocity_edges(t_array, V_array, t_start, t_end, plot=True, title=None):
     return v_leading, v_trailing, v_center, v_expansion
 
 
+def fit_expansion_parameters(t_array, V_rtn_frame, R_rtn_frame, idx1, idx2, idx_c):
+    """
+    Estimate V_c, v_exp, and alpha from in-situ observations over
+    t_array[idx1:idx2+1], referenced to t_array[idx_c].
+    """
+    t_c = t_array[idx_c]
+    t_interval = t_array[idx1:idx2 + 1]
+    V_interval = V_rtn_frame[idx1:idx2 + 1]
+
+    V_c = np.mean(V_interval, axis=0)
+
+    t_sec_c = np.array([(t - t_c).total_seconds() for t in t_interval])
+    slope, _ = np.polyfit(t_sec_c, V_interval[:, 0], deg=1)
+    dt_total = (t_array[idx2] - t_array[idx1]).total_seconds()
+    v_exp = 0.5 * slope * dt_total
+
+    R_t1 = R_rtn_frame[idx1, 0]
+    R_t2 = R_rtn_frame[idx2, 0]
+    tau1 = (t_c - t_array[idx1]).total_seconds()
+    tau2 = (t_array[idx2] - t_c).total_seconds()
+
+    denominator = (R_t1 - R_t2) + V_c[0] * (tau1 + tau2) + v_exp * (tau1 - tau2)
+    alpha = 2 * v_exp / denominator
+
+    return V_c, v_exp, alpha
+
+
 # ============================================================================
 # CME POSITION CALCULATION
 # ============================================================================
+
+def reconstruct_mo_positions(t_array, R_rtn_frame, t_c, R_sc_tc, V_c, alpha):
+    """
+    t_array, R_rtn_frame : the MO-sliced arrays
+    t_c    : reference datetime
+    R_sc_tc: R_sc_rotated[idx_reference_spatial, 0] (scalar), passed in directly
+    """
+    dt = np.array([(t - t_c).total_seconds() for t in t_array])
+    f = 1 + alpha * dt
+
+    R_positions = np.zeros_like(R_rtn_frame, dtype=float)
+    R_positions[:, 0] = (R_rtn_frame[:, 0] - V_c[0]*dt + alpha*R_sc_tc*dt) / f
+    R_positions[:, 1] = (R_rtn_frame[:, 1] - V_c[1]*dt) / f
+    R_positions[:, 2] = (R_rtn_frame[:, 2] - V_c[2]*dt) / f
+    return R_positions
+
+
+def reconstruct_ballistic_positions(t_array, V_mean, t_anchor, R_anchor):
+    """
+    Reconstruct positions assuming uniform velocity from an anchor point.
+    Works for: sheath (anchored to MO leading edge) and full-event
+    fallback (anchored to spacecraft position at t_c).
+    """
+    dt = np.array([(t_anchor - t).total_seconds() for t in t_array])
+    return R_anchor[np.newaxis, :] + V_mean[np.newaxis, :] * dt[:, np.newaxis]
+
+
+def correct_B_ageing(B_array, t_array, t_c, alpha):
+    """
+    Correct magnetic field magnitude for the ageing effect (Eq. 34):
+    B'(t_c) = f(t)^2 * B(t), where f(t) = 1 + alpha*(t - t_c).
+
+    Parameters
+    ----------
+    B_array : ndarray, shape (N, 3)
+        Measured field vectors (any frame — correction is a scalar factor,
+        so it commutes with rotation).
+    t_array : list of datetime
+        Times corresponding to B_array.
+    t_c : datetime
+        Reference time.
+    alpha : float
+        Isotropic expansion rate.
+
+    Returns
+    -------
+    B_corrected : ndarray, shape (N, 3)
+        Ageing-corrected field vectors at t_c.
+    """
+    dt = np.array([(t - t_c).total_seconds() for t in t_array])
+    f = 1 + alpha * dt
+    return B_array * (f ** 2)[:, np.newaxis]
+
 
 def calculate_cme_positions(t_array, r_sc_array, t0, t1, t2, 
                            v_hgi, 
